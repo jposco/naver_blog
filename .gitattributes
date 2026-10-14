@@ -1,0 +1,7 @@
+# 집(Win/Mac)·회사 PC 간 줄바꿈 충돌 방지
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
