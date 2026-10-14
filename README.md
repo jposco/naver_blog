@@ -9,6 +9,7 @@ posts/YYYY/YYYY-MM-DD-slug/
   post.md        # 원고 (frontmatter의 status로 진행상태 관리)
   images/        # 해당 글 이미지 (업로드 전 1MB 이하로 압축)
 templates/post.md  # 새 글 템플릿
+tools/thumbnail/   # 대표이미지 생성기 (사진 GPS → 지도 핀 + 사진 카드)
 CLAUDE.md          # Claude 작업 규칙
 ```
 
@@ -28,3 +29,12 @@ pull 안 하고 작업하면 충돌 난다. 한 글은 한 번에 한 PC에서�
 ## 발행
 
 네이버 블로그는 글쓰기 API가 없다 → `post.md` 내용을 SmartEditor에 붙여넣고 이미지 수동 업로드. 발행 후 `status: published`, `published_url` 기입.
+
+## 대표이미지 생성
+
+```bash
+pip install -r requirements.txt && python -m playwright install chromium   # 로컬 최초 1회
+export GOOGLE_MAPS_API_KEY=...                                               # Static Maps API 키
+python tools/thumbnail/thumbnail.py scan   posts/2026/2026-10-14-tokyo-tower-photo-spots/thumbnail.yaml
+python tools/thumbnail/thumbnail.py render posts/2026/2026-10-14-tokyo-tower-photo-spots/thumbnail.yaml
+```

@@ -1,0 +1,25 @@
+# 대표이미지 설정 — 렌더: python tools/thumbnail/thumbnail.py render <이 파일>
+eyebrow: TOKYO TOWER · PHOTO SPOTS
+title: ["도쿄타워", "사진스팟 총정리"]
+subtitle: ""            # 비우면 "N SPOTS"
+photos_dir: photos      # 원본 사진 폴더 (EXIF GPS 필요)
+output: out/thumbnail.png
+max_spots: 8            # 썸네일 가독성 한계. 9장 이상은 비추천
+
+landmark:
+  label: ""            # 타워 아래 라벨 (예: TOKYO TOWER). 비우면 숨김
+  lat: 35.658581
+  lon: 139.745433
+
+map:
+  language: ko
+  zoom: null            # null = 자동
+  center: null          # [lat, lon], null = 자동
+
+# 사진별 설정 (키 = 파일명)
+#   caption: 카드 하단 스팟명
+#   order: 번호 순서 (기본: 촬영시각순)
+#   lat/lon: GPS 없는 사진 수동 좌표
+#   card: [x, y] 카드 위치 수동 지정 (1080 기준 px)
+#   skip: true  제외
+spots: {}
