@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 300">
+  <defs>
+    <!-- 타워 실루엣 -->
+    <clipPath id="tw">
+      <rect x="58.6" y="0" width="2.8" height="44"/>
+      <rect x="53" y="44" width="14" height="9" rx="1.5"/>
+      <polygon points="54,53 66,53 70,134 50,134"/>
+      <rect x="40" y="134" width="40" height="17" rx="2"/>
+      <path d="M44,151 L76,151 L114,300 L84,300 Q78,252 60,246 Q42,252 36,300 L6,300 Z"/>
+    </clipPath>
+    <pattern id="lattice" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="7" stroke="#000" stroke-opacity=".16" stroke-width="1"/>
+    </pattern>
+    <linearGradient id="shade" x1="0" x2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".22"/>
+      <stop offset=".5" stop-color="#fff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity=".22"/>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#tw)">
+    <rect width="120" height="300" fill="#E4472C"/>
+    <!-- 인터내셔널 오렌지/화이트 7단 -->
+    <rect y="20" width="120" height="10" fill="#FFF7EF"/>
+    <rect y="72" width="120" height="16" fill="#FFF7EF"/>
+    <rect y="108" width="120" height="14" fill="#FFF7EF"/>
+    <rect y="134" width="120" height="17" fill="#FFF7EF"/>
+    <rect y="176" width="120" height="20" fill="#FFF7EF"/>
+    <rect y="226" width="120" height="22" fill="#FFF7EF"/>
+    <rect width="120" height="300" fill="url(#lattice)"/>
+    <rect width="120" height="300" fill="url(#shade)"/>
+    <!-- 전망대 창 -->
+    <rect x="40" y="139" width="40" height="5" fill="#2B3A55" opacity=".85"/>
+    <rect x="53" y="46.5" width="14" height="3" fill="#2B3A55" opacity=".85"/>
+  </g>
+</svg>

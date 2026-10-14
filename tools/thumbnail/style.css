@@ -1,0 +1,74 @@
+:root {
+  --brick: #A63D2F;
+  --ink: #2A2724;
+  --grey: #8A847B;
+  --line: #B9B2A6;
+  --paper: #F6F3EC;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { width: 1360px; height: 1200px; background: var(--paper); }
+.canvas { position: relative; width: 1360px; height: 1200px; overflow: hidden; font-family: 'Noto Sans KR', sans-serif; color: var(--ink); }
+
+/* 헤더 */
+header { position: absolute; left: 56px; top: 44px; }
+.eyebrow { font-size: 14px; font-weight: 500; letter-spacing: .32em; color: var(--grey); }
+h1 { margin-top: 14px; font-size: 50px; font-weight: 900; letter-spacing: -.03em; line-height: 1.1; }
+header p { margin-top: 12px; font-size: 18px; color: #6F6A62; letter-spacing: -.01em; }
+header p:empty { display: none; }
+.badge { position: absolute; right: 56px; top: 52px; width: 210px; padding-top: 14px; border-top: 1.5px solid #CFC6B5; }
+.badge b, .badge span { display: block; font-size: 16px; color: var(--grey); letter-spacing: .02em; }
+.badge b { font-weight: 500; }
+.badge span { margin-top: 4px; font-size: 15px; }
+
+/* 지도 패널 */
+.panel { position: absolute; border-radius: 22px; overflow: hidden; background: #ECE8DF; }
+.map { position: absolute; inset: 0; width: 100%; height: 100%; }
+.map.preview {
+  background:
+    repeating-linear-gradient(0deg, transparent 0 79px, rgba(0,0,0,.045) 79px 80px),
+    repeating-linear-gradient(90deg, transparent 0 79px, rgba(0,0,0,.045) 79px 80px), #ECE8DF;
+}
+.map.preview::after {
+  content: 'MAP PREVIEW — GOOGLE_MAPS_API_KEY 필요'; position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%);
+  font-size: 13px; letter-spacing: .1em; color: rgba(0,0,0,.28);
+}
+.north { position: absolute; right: 26px; top: 20px; font-size: 15px; color: var(--grey); letter-spacing: .1em; }
+
+/* 선 */
+.lines { position: absolute; inset: 0; width: 1360px; height: 1200px; z-index: 5; }
+.radial line { stroke: var(--brick); stroke-width: 4.5; stroke-dasharray: 0 11; stroke-linecap: round; opacity: .9; }
+.leader line { stroke: #9C958A; stroke-width: 1.4; }
+
+/* 도쿄타워 */
+.halo {
+  position: absolute; width: 210px; height: 48px; transform: translate(-50%, -50%); z-index: 6;
+  background: radial-gradient(closest-side, rgba(60,40,30,.28), rgba(60,40,30,0));
+}
+.tower { position: absolute; z-index: 7; filter: drop-shadow(0 6px 10px rgba(60,30,20,.28)); }
+.tower svg { width: 100%; height: 100%; display: block; }
+.tower-label {
+  position: absolute; z-index: 8; padding: 9px 16px 8px; text-align: center; white-space: nowrap;
+  background: #fff; border: 1.5px solid #E2DACB; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.06);
+}
+.tower-label b { display: block; font-size: 19px; font-weight: 700; color: var(--brick); letter-spacing: -.01em; }
+.tower-label small { display: block; margin-top: 1px; font-size: 11px; color: var(--grey); letter-spacing: .04em; }
+.tower-label:has(b:empty) { display: none; }
+
+/* 사진 카드 */
+.card {
+  position: absolute; z-index: 10; background: #fff; border-radius: 10px; padding: 10px;
+  box-shadow: 0 10px 26px rgba(50,40,30,.13), 0 1px 3px rgba(50,40,30,.10);
+}
+.card img { display: block; width: 100%; height: 160px; object-fit: cover; border-radius: 3px; }
+.card figcaption { padding: 13px 4px 0; }
+.card b { display: flex; align-items: baseline; gap: 9px; font-size: 19px; font-weight: 700; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; }
+.card i { font-style: normal; font-weight: 500; font-size: 15px; color: var(--brick); letter-spacing: .02em; }
+.card small { display: block; margin-top: 6px; font-size: 9.5px; color: var(--grey); letter-spacing: .06em; text-transform: uppercase; }
+.card span { display: block; margin-top: 4px; font-size: 12.5px; color: #5E5952; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 핀 */
+.pin {
+  position: absolute; z-index: 20; width: 40px; height: 40px; transform: translate(-50%, -50%);
+  border-radius: 50%; background: var(--brick); border: 3px solid #fff; box-shadow: 0 3px 8px rgba(0,0,0,.25);
+  color: #fff; font-size: 18px; font-weight: 700; line-height: 34px; text-align: center;
+}
