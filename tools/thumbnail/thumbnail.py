@@ -1,7 +1,7 @@
-"""블로그 대표이미지 생성기: 사진 EXIF GPS → 구글 지도 위 핀 + 사진 카드 + 랜드마크 아이콘.
+"""블로그 대표이미지 생성기: 사진 EXIF GPS → 구글 지도 패널 위 번호 핀 + 사진 카드 + 랜드마크 아이콘.
 
 사용법:
-    python tools/thumbnail/thumbnail.py scan   posts/.../thumbnail.yaml   # 사진별 GPS/촬영시각 확인
+    python tools/thumbnail/thumbnail.py scan   posts/.../thumbnail.yaml   # 사진별 GPS + 장소 묶음(클러스터) 확인
     python tools/thumbnail/thumbnail.py render posts/.../thumbnail.yaml   # PNG 생성
 
 지도 배경은 환경변수 GOOGLE_MAPS_API_KEY 가 있어야 한다. 없으면 레이아웃 확인용 미리보기 배경으로 렌더링한다.
@@ -10,10 +10,10 @@ import base64
 import hashlib
 import html
 import io
+import itertools
 import json
 import math
 import os
-import random
 import sys
 from pathlib import Path
 
@@ -33,29 +33,36 @@ ROOT = HERE.parents[1]
 CACHE = ROOT / ".cache" / "thumbnail"
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp"}
 
-S = 1080            # 캔버스 크기(px)
-MAP_SCALE = 2       # Static Maps scale=2 → 540 논리px = 1080px
-TITLE_BOTTOM = 330  # 타이틀 영역 하단
-TITLE_RIGHT = 660   # 타이틀 텍스트 우측 끝 (이 오른쪽은 상단까지 카드 배치 가능)
-FIT_BOX = (250, 500, 830, 850)  # 핀이 들어갈 영역 (x0, y0, x1, y1). 바깥 링은 사진 카드 자리
-TOWER_W, TOWER_H = 124, 310
+# ---------- 레이아웃 (px) ----------
+W, H = 1360, 1200
+PANEL = (40, 180, 1320, 1170)       # 지도 패널. 1280x990 = Static Maps 640x495 @scale2 (업스케일 없음)
+MAP_SCALE = 2
+CARD_W, CARD_H = 250, 262
+CARD_X = (60, W - 60 - CARD_W)      # 좌/우 카드 열
+CARD_Y = (200, 520, 840)            # 열마다 3칸 → 최대 6곳. 하단은 구글 로고 자리 비움
+PIN_BOX = (350, 250, 1010, 1100)    # 핀이 들어갈 영역 (카드 열 사이)
+TOWER_W, TOWER_H = 150, 330
+MAX_PLACES = len(CARD_X) * len(CARD_Y)
 
-# 차분한 웜톤 지도 스타일 (POI·대중교통·도로 라벨 제거)
+# 크림톤 지도 스타일 (POI 아이콘·도로명 제거, 역 이름만 유지)
 MAP_STYLES = [
-    "element:geometry|color:0xf3efe7",
+    "element:geometry|color:0xefebe3",
     "element:labels.icon|visibility:off",
-    "element:labels.text.fill|color:0x8f877b",
-    "element:labels.text.stroke|color:0xf3efe7",
+    "element:labels.text.fill|color:0x8d8578",
+    "element:labels.text.stroke|color:0xefebe3|weight:3",
     "feature:poi|visibility:off",
     "feature:poi.park|visibility:on",
-    "feature:poi.park|element:geometry|color:0xdde6d0",
-    "feature:poi.park|element:labels|visibility:off",
+    "feature:poi.park|element:geometry|color:0xdbe5cf",
+    "feature:poi.park|element:labels.text.fill|color:0x7f9472",
+    "feature:landscape.man_made|element:geometry|color:0xe7e1d6",
     "feature:transit|visibility:off",
+    "feature:transit.station.rail|element:labels.text|visibility:on",
     "feature:road|element:geometry|color:0xffffff",
     "feature:road|element:labels|visibility:off",
-    "feature:road.highway|element:geometry|color:0xf7e3cf",
-    "feature:water|element:geometry|color:0xc6d5dc",
+    "feature:road.highway|element:geometry|color:0xf6eee2",
+    "feature:water|element:geometry|color:0xcad8dd",
     "feature:administrative|element:geometry|visibility:off",
+    "feature:administrative.neighborhood|element:labels|visibility:off",
 ]
 
 
@@ -66,8 +73,7 @@ def _dms(v):
 
 
 def read_meta(path):
-    img = Image.open(path)
-    exif = img.getexif()
+    exif = Image.open(path).getexif()
     gps = exif.get_ifd(0x8825)
     lat = lon = None
     if gps and 2 in gps and 4 in gps:
@@ -77,26 +83,66 @@ def read_meta(path):
         if gps.get(3) == "W":
             lon = -lon
     taken = exif.get_ifd(0x8769).get(36867) or exif.get(306)
-    return {"lat": lat, "lon": lon, "taken": taken, "model": exif.get(272)}
+    return {"file": path, "lat": lat, "lon": lon, "taken": str(taken) if taken else "", "model": exif.get(272) or ""}
 
 
-def load_spots(cfg, base):
-    photos_dir = base / cfg.get("photos_dir", "photos")
-    overrides = cfg.get("spots") or {}
-    spots = []
-    for p in sorted(photos_dir.iterdir()) if photos_dir.exists() else []:
-        if p.suffix.lower() not in PHOTO_EXT:
+def read_photos(photos_dir):
+    if not photos_dir.exists():
+        return []
+    photos = [read_meta(p) for p in sorted(photos_dir.iterdir()) if p.suffix.lower() in PHOTO_EXT]
+    return sorted(photos, key=lambda p: (p["taken"], p["file"].name))
+
+
+def dist_m(a, b):
+    k = 111_320
+    return math.hypot((a[0] - b[0]) * k, (a[1] - b[1]) * k * math.cos(math.radians(a[0])))
+
+
+def cluster(photos, radius):
+    """반경 radius(m) 안의 사진을 한 장소로 묶는다 (촬영순, 묶음 중심 기준 단순 병합)."""
+    groups = []
+    for p in photos:
+        if p["lat"] is None:
             continue
-        ov = overrides.get(p.name) or {}
-        if ov.get("skip"):
-            continue
-        meta = read_meta(p)
-        if ov.get("lat") is not None:
-            meta["lat"], meta["lon"] = ov["lat"], ov["lon"]
-        spots.append({"file": p, "caption": ov.get("caption", ""), "card": ov.get("card"),
-                      "order": ov.get("order", 999), **meta})
-    spots.sort(key=lambda s: (s["order"], s["taken"] or "", s["file"].name))
-    return spots
+        for g in groups:
+            if dist_m(g["center"], (p["lat"], p["lon"])) <= radius:
+                g["photos"].append(p)
+                n = len(g["photos"])
+                g["center"] = (sum(x["lat"] for x in g["photos"]) / n, sum(x["lon"] for x in g["photos"]) / n)
+                break
+        else:
+            groups.append({"center": (p["lat"], p["lon"]), "photos": [p]})
+    return groups
+
+
+def resolve_places(cfg, base):
+    """thumbnail.yaml 의 places 를 좌표·대표사진으로 확정. places 가 비어 있으면 자동 클러스터 사용."""
+    photos = {p["file"].name: p for p in read_photos(base / cfg.get("photos_dir", "photos"))}
+    places = cfg.get("places") or []
+    if not places:
+        groups = cluster(list(photos.values()), cfg.get("cluster_radius_m", 40))
+        places = [{"photos": [p["file"].name for p in g["photos"]]} for g in groups]
+    out = []
+    for i, pl in enumerate(places):
+        files = pl.get("photos") or []
+        missing = [f for f in files + ([pl["cover"]] if pl.get("cover") else []) if f not in photos]
+        if missing:
+            raise SystemExit(f"places[{i}] 사진 없음: {missing}")
+        if pl.get("lat") is not None:
+            lat, lon = pl["lat"], pl["lon"]
+        else:
+            pts = [(photos[f]["lat"], photos[f]["lon"]) for f in files if photos[f]["lat"] is not None]
+            if not pts:
+                raise SystemExit(f"places[{i}] 좌표 없음: GPS 있는 사진을 넣거나 lat/lon 지정")
+            lat, lon = sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
+        cover = pl.get("cover") or (files[0] if files else None)
+        if not cover:
+            raise SystemExit(f"places[{i}] 대표사진(cover) 없음")
+        out.append({"lat": lat, "lon": lon, "cover": photos[cover]["file"], "name": pl.get("name", ""),
+                    "en": pl.get("en", ""), "desc": pl.get("desc", "")})
+    if len(out) > MAX_PLACES:
+        raise SystemExit(f"장소 {len(out)}곳: 최대 {MAX_PLACES}곳. places 를 줄이세요")
+    return out
 
 
 # ---------- 지도 투영 (Web Mercator) ----------
@@ -108,47 +154,52 @@ def world(lat, lon, z):
 
 def unworld(x, y, z):
     n = 256 * 2 ** z
-    lon = x / n * 360 - 180
-    lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
-    return lat, lon
+    return math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n)))), x / n * 360 - 180
 
 
-def fit_view(points, cfg_map):
-    """모든 점이 FIT_BOX 안에 들어오는 최대 줌과 중심 계산."""
-    x0, y0, x1, y1 = FIT_BOX
-    if cfg_map.get("zoom"):
-        zooms = [cfg_map["zoom"]]
-    else:
-        zooms = range(18, 9, -1)
-    for z in zooms:
-        ws = [world(la, lo, z) for la, lo in points]
-        xs, ys = [w[0] for w in ws], [w[1] for w in ws]
-        if (max(xs) - min(xs)) * MAP_SCALE <= x1 - x0 and (max(ys) - min(ys)) * MAP_SCALE <= y1 - y0 or len(zooms) == 1:
-            if cfg_map.get("center"):
-                return tuple(cfg_map["center"]), z
-            bx, by = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
-            # bbox 중심이 FIT_BOX 중심에 오도록 지도 중심 이동
-            cx = bx - ((x0 + x1) / 2 - S / 2) / MAP_SCALE
-            cy = by - ((y0 + y1) / 2 - S / 2) / MAP_SCALE
-            return unworld(cx, cy, z), z
-    raise SystemExit("스팟 범위가 너무 넓음: thumbnail.yaml 의 map.zoom 을 지정하세요")
+def _shift(rel, bounds):
+    """모든 rel[i]+t 가 bounds[i]=(lo,hi) 안에 드는 t (가능 범위의 가운데). 불가능하면 None."""
+    lo = max(b[0] - r for r, b in zip(rel, bounds))
+    hi = min(b[1] - r for r, b in zip(rel, bounds))
+    return (lo + hi) / 2 if lo <= hi else None
+
+
+def fit_view(places, landmark, cfg_map):
+    """핀은 PIN_BOX 안, 타워는 꼭대기까지 패널 안에 들어오는 최대 줌과 지도 중심."""
+    pts = [(p["lat"], p["lon"]) for p in places] + [(landmark["lat"], landmark["lon"])]
+    x0, y0, x1, y1 = PIN_BOX
+    xb = [(x0, x1)] * len(pts)
+    yb = [(y0, y1)] * len(places) + [(PANEL[1] + TOWER_H + 30, y1)]
+    pcx, pcy = (PANEL[0] + PANEL[2]) / 2, (PANEL[1] + PANEL[3]) / 2
+    for z in [cfg_map["zoom"]] if cfg_map.get("zoom") else range(18, 9, -1):
+        ws = [world(*p, z) for p in pts]
+        tx = _shift([w[0] * MAP_SCALE for w in ws], xb)
+        ty = _shift([w[1] * MAP_SCALE for w in ws], yb)
+        if tx is None or ty is None:
+            if cfg_map.get("zoom"):
+                raise SystemExit("지정한 map.zoom 으로는 핀이 다 안 들어감")
+            continue
+        if cfg_map.get("center"):
+            return tuple(cfg_map["center"]), z
+        return unworld((pcx - tx) / MAP_SCALE, (pcy - ty) / MAP_SCALE, z), z
+    raise SystemExit("스팟 범위가 너무 넓음")
 
 
 def to_px(lat, lon, center, z):
     wx, wy = world(lat, lon, z)
     cx, cy = world(*center, z)
-    return S / 2 + (wx - cx) * MAP_SCALE, S / 2 + (wy - cy) * MAP_SCALE
+    return (PANEL[0] + PANEL[2]) / 2 + (wx - cx) * MAP_SCALE, (PANEL[1] + PANEL[3]) / 2 + (wy - cy) * MAP_SCALE
 
 
 def fetch_map(center, z, cfg_map):
     key = os.environ.get("GOOGLE_MAPS_API_KEY")
     if not key:
         return None
-    params = [("center", f"{center[0]:.6f},{center[1]:.6f}"), ("zoom", z), ("size", f"{S // MAP_SCALE}x{S // MAP_SCALE}"),
+    pw, ph = (PANEL[2] - PANEL[0]) // MAP_SCALE, (PANEL[3] - PANEL[1]) // MAP_SCALE
+    params = [("center", f"{center[0]:.6f},{center[1]:.6f}"), ("zoom", z), ("size", f"{pw}x{ph}"),
               ("scale", MAP_SCALE), ("language", cfg_map.get("language", "ko")), ("format", "png")]
     params += [("style", s) for s in cfg_map.get("styles", MAP_STYLES)]
-    sig = hashlib.sha1(json.dumps(params).encode()).hexdigest()[:16]
-    cached = CACHE / f"map_{sig}.png"
+    cached = CACHE / f"map_{hashlib.sha1(json.dumps(params).encode()).hexdigest()[:16]}.png"
     if not cached.exists():
         r = requests.get("https://maps.googleapis.com/maps/api/staticmap", params=params + [("key", key)], timeout=30)
         if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image"):
@@ -159,123 +210,83 @@ def fetch_map(center, z, cfg_map):
 
 
 # ---------- 카드 배치 ----------
-def card_size(n):
-    return 250 if n <= 4 else 214 if n <= 6 else 188 if n <= 8 else 166
+def _attach(slot):
+    x, y = slot
+    return (x + CARD_W if x < W / 2 else x), y + CARD_H * 0.36
 
 
-def overlap(a, b, gap=0):
-    return not (a[2] + gap <= b[0] or b[2] + gap <= a[0] or a[3] + gap <= b[1] or b[3] + gap <= a[1])
-
-
-def _leader(pin, r):
-    return pin[0], pin[1], (r[0] + r[2]) / 2, (r[1] + r[3]) / 2
-
-
-def crosses(a, b):
+def _crosses(a, b):
     def ccw(p, q, r):
         return (r[1] - p[1]) * (q[0] - p[0]) > (q[1] - p[1]) * (r[0] - p[0])
     p1, p2, p3, p4 = a[:2], a[2:], b[:2], b[2:]
     return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
 
 
-def place_cards(pins, tower_px, cw, ch, manual):
-    """핀·타워·지도 저작권 표기를 가리지 않는 위치에 카드를 탐욕적으로 배치."""
-    blocked = [(tower_px[0] - TOWER_W / 2 - 10, tower_px[1] - TOWER_H - 10, tower_px[0] + TOWER_W / 2 + 10, tower_px[1] + 26),
-               (0, S - 46, 170, S), (S - 330, S - 30, S, S)]
-    blocked += [(x - 26, y - 52, x + 26, y + 10) for x, y in pins]
-    slots = []
-    for x in range(24, S - cw - 23, 16):
-        for y in range(36 if x >= TITLE_RIGHT else TITLE_BOTTOM, S - ch - 23, 16):
-            r = (x, y, x + cw, y + ch)
-            if not any(overlap(r, b) for b in blocked):
-                slots.append(r)
-    fixed = {i: (m[0], m[1], m[0] + cw, m[1] + ch) for i, m in manual.items()}
-    rng = random.Random(7)
-    order = [i for i in range(len(pins)) if i not in fixed]
+def assign_cards(pins, tower):
+    """좌우 6칸 중 지시선 길이·교차가 최소인 칸 조합을 전수 탐색."""
+    slots = [(x, y) for x in CARD_X for y in CARD_Y]
     best, best_cost = None, math.inf
-    for _ in range(150):  # 배치 순서를 바꿔가며 지시선 길이·교차가 최소인 배치 선택
-        placed, cost = dict(fixed), 0.0
-        for i in order:
-            px, py = pins[i]
-            pick = None
-            for r in slots:
-                if any(overlap(r, o, 14) for o in placed.values()):
-                    continue
-                cx, cy = (r[0] + r[2]) / 2, (r[1] + r[3]) / 2
-                c = math.hypot(cx - px, cy - py)
-                if c < cw * 0.75:
-                    c += 400
-                c += 300 * sum(crosses((px, py, cx, cy), _leader(pins[j], placed[j])) for j in placed)
-                if pick is None or c < pick[0]:
-                    pick = (c, r)
-            if pick is None:
-                cost = math.inf
-                break
-            cost += pick[0]
-            placed[i] = pick[1]
+    for perm in itertools.permutations(slots, len(pins)):
+        leaders = [(*pins[i], *_attach(s)) for i, s in enumerate(perm)]
+        cost = sum(math.hypot(l[2] - l[0], l[3] - l[1]) for l in leaders)
+        cost += 1500 * sum(_crosses(a, b) for a, b in itertools.combinations(leaders, 2))
+        cost += 200 * sum(_crosses(l, (*tower, *p)) for l in leaders for p in pins if (l[0], l[1]) != p)
         if cost < best_cost:
-            best, best_cost = placed, cost
-        rng.shuffle(order)
-    if best is None:
-        raise SystemExit("카드 배치 실패. 사진 수를 줄이거나 spots.<파일>.card 로 위치를 직접 지정하세요")
-    placed = best
-    return placed
+            best, best_cost = perm, cost
+    return best
 
 
 # ---------- 렌더 ----------
-def photo_uri(path, px):
-    img = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
-    img = ImageOps.fit(img, (px, px), Image.LANCZOS, centering=(0.5, 0.5))
+def img_uri(path, size):
+    img = ImageOps.fit(ImageOps.exif_transpose(Image.open(path)).convert("RGB"), size, Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=90)
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def file_uri(path):
-    return "data:image/png;base64," + base64.b64encode(Path(path).read_bytes()).decode()
-
-
-def build_html(cfg, spots, center, z, map_path):
+def build_html(cfg, places, center, z, map_path):
+    e = html.escape
     lm = cfg["landmark"]
     tx, ty = to_px(lm["lat"], lm["lon"], center, z)
-    pins = [to_px(s["lat"], s["lon"], center, z) for s in spots]
-    cw = card_size(len(spots))
-    ch = cw + 34 if any(s["caption"] for s in spots) else cw + 16
-    manual = {i: s["card"] for i, s in enumerate(spots) if s["card"]}
-    cards = place_cards(pins, (tx, ty), cw, ch, manual)
+    pins = [to_px(p["lat"], p["lon"], center, z) for p in places]
+    slots = assign_cards(pins, (tx, ty))
     css = (HERE / "style.css").read_text(encoding="utf-8")
     tower = (HERE / "tokyo_tower.svg").read_text(encoding="utf-8")
-    bg = f'<img class="map" src="{file_uri(map_path)}">' if map_path else '<div class="map preview"></div>'
+    if map_path:
+        bg = f'<img class="map" src="data:image/png;base64,{base64.b64encode(map_path.read_bytes()).decode()}">'
+    else:
+        bg = '<div class="map preview"></div>'
 
-    lines, items = [], []
-    for i, s in enumerate(spots):
-        px, py = pins[i]
-        x0, y0, x1, y1 = cards[i]
-        lines.append(f'<line x1="{px:.1f}" y1="{py - 20:.1f}" x2="{(x0 + x1) / 2:.1f}" y2="{(y0 + y1) / 2:.1f}"/>')
-        rot = (-2.6, 1.8, -1.2, 2.4, -2.0, 1.4, -1.6, 2.2)[i % 8]
-        cap = f'<figcaption>{html.escape(s["caption"])}</figcaption>' if s["caption"] else ""
+    radials, leaders, items = [], [], []
+    for i, (p, (px, py), slot) in enumerate(zip(places, pins, slots)):
+        ax, ay = _attach(slot)
+        d = math.hypot(px - tx, py - ty) or 1  # 타워 다리 바깥에서 출발 (아치 사이로 점선이 비치지 않게)
+        r = min(TOWER_W * 0.45, d * 0.5)
+        radials.append(f'<line x1="{tx + (px - tx) / d * r:.1f}" y1="{ty + (py - ty) / d * r:.1f}" x2="{px:.1f}" y2="{py:.1f}"/>')
+        leaders.append(f'<line x1="{px:.1f}" y1="{py:.1f}" x2="{ax:.1f}" y2="{ay:.1f}"/>')
         items.append(
-            f'<figure class="card" style="left:{x0}px;top:{y0}px;width:{cw}px;height:{ch}px;transform:rotate({rot}deg)">'
-            f'<img src="{photo_uri(s["file"], (cw - 16) * 2)}"><span class="no">{i + 1}</span>{cap}</figure>'
-            f'<div class="pin" style="left:{px:.1f}px;top:{py:.1f}px"><span>{i + 1}</span></div>')
+            f'<figure class="card" style="left:{slot[0]}px;top:{slot[1]}px;width:{CARD_W}px;height:{CARD_H}px">'
+            f'<img src="{img_uri(p["cover"], (CARD_W * 2 - 40, 320))}">'
+            f'<figcaption><b><i>{i + 1:02d}</i>{e(p["name"])}</b><small>{e(p["en"])}</small><span>{e(p["desc"])}</span></figcaption>'
+            f'</figure><div class="pin" style="left:{px:.1f}px;top:{py:.1f}px">{i + 1}</div>')
 
-    t = cfg.get("title") or ["", ""]
-    sub = cfg.get("subtitle") or f"{len(spots)} SPOTS"
+    badge = cfg.get("badge") or ["PHOTO SPOTS", "{n:02d} places"]
+    lx, ly = tx + 64, ty - TOWER_H + 44
     return f"""<!doctype html><html><head><meta charset="utf-8">
-<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;800&family=Noto+Sans+KR:wght@500;900&display=block" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=block" rel="stylesheet">
 <style>{css}</style></head><body><div class="canvas">
-{bg}
-<div class="title-fade"></div>
-<svg class="leaders" viewBox="0 0 {S} {S}">{''.join(lines)}</svg>
+<header>
+  <div class="eyebrow">{e(cfg.get("eyebrow", ""))}</div>
+  <h1>{e(cfg.get("title", ""))}</h1>
+  <p>{e(cfg.get("subtitle", ""))}</p>
+</header>
+<aside class="badge"><b>{e(badge[0])}</b><span>{e(badge[1].format(n=len(places)))}</span></aside>
+<div class="panel" style="left:{PANEL[0]}px;top:{PANEL[1]}px;width:{PANEL[2] - PANEL[0]}px;height:{PANEL[3] - PANEL[1]}px">{bg}<div class="north">N ↑</div></div>
+<svg class="lines" viewBox="0 0 {W} {H}"><g class="radial">{''.join(radials)}</g><g class="leader">{''.join(leaders)}</g></svg>
 <div class="halo" style="left:{tx:.1f}px;top:{ty:.1f}px"></div>
 <div class="tower" style="left:{tx - TOWER_W / 2:.1f}px;top:{ty - TOWER_H:.1f}px;width:{TOWER_W}px;height:{TOWER_H}px">{tower}</div>
-<div class="tower-label" style="left:{tx:.1f}px;top:{ty + 8:.1f}px">{html.escape(lm.get("label", ""))}</div>
+<div class="tower-label" style="left:{lx:.1f}px;top:{ly:.1f}px"><b>{e(lm.get("name", ""))}</b><small>{e(lm.get("sub", ""))}</small></div>
 {''.join(items)}
-<header>
-  <div class="eyebrow">{html.escape(cfg.get("eyebrow", ""))}</div>
-  <h1>{html.escape(t[0])}<br><em>{html.escape(t[1])}</em></h1>
-  <div class="sub">{html.escape(sub)}</div>
-</header>
 </div></body></html>"""
 
 
@@ -285,19 +296,16 @@ def render(cfg_path):
     cfg_path = Path(cfg_path).resolve()
     base = cfg_path.parent
     cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-    spots = [s for s in load_spots(cfg, base) if s["lat"] is not None]
-    if not spots:
-        raise SystemExit("GPS 있는 사진이 없음. scan 으로 확인하세요")
-    spots = spots[: cfg.get("max_spots", 8)]
-    lm = cfg["landmark"]
-    center, z = fit_view([(s["lat"], s["lon"]) for s in spots] + [(lm["lat"], lm["lon"])], cfg.get("map") or {})
+    places = resolve_places(cfg, base)
+    if not places:
+        raise SystemExit("장소 없음. scan 으로 사진 GPS를 확인하세요")
+    center, z = fit_view(places, cfg["landmark"], cfg.get("map") or {})
     map_path = fetch_map(center, z, cfg.get("map") or {})
     if not map_path:
         print("! GOOGLE_MAPS_API_KEY 없음 → 미리보기 배경으로 렌더링")
-    doc = build_html(cfg, spots, center, z, map_path)
     CACHE.mkdir(parents=True, exist_ok=True)
     page_file = CACHE / "page.html"
-    page_file.write_text(doc, encoding="utf-8")
+    page_file.write_text(build_html(cfg, places, center, z, map_path), encoding="utf-8")
     out = base / cfg.get("output", "out/thumbnail.png")
     out.parent.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
@@ -305,26 +313,33 @@ def render(cfg_path):
         if not exe and Path("/opt/pw-browsers/chromium-1194/chrome-linux/chrome").exists():
             exe = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
         browser = p.chromium.launch(executable_path=exe) if exe else p.chromium.launch()
-        page = browser.new_page(viewport={"width": S, "height": S})
+        page = browser.new_page(viewport={"width": W, "height": H})
         page.goto(page_file.as_uri(), wait_until="networkidle")
         page.evaluate("document.fonts.ready")
         page.screenshot(path=str(out))
         browser.close()
-    print(f"zoom={z} center={center[0]:.5f},{center[1]:.5f} spots={len(spots)} → {out}")
+    print(f"zoom={z} center={center[0]:.5f},{center[1]:.5f} places={len(places)} → {out}")
 
 
 def scan(cfg_path):
     cfg_path = Path(cfg_path).resolve()
     cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-    spots = load_spots(cfg, cfg_path.parent)
-    if not spots:
+    photos = read_photos(cfg_path.parent / cfg.get("photos_dir", "photos"))
+    if not photos:
         print("사진 없음:", cfg_path.parent / cfg.get("photos_dir", "photos"))
-    for s in spots:
-        loc = f'{s["lat"]:.6f},{s["lon"]:.6f}' if s["lat"] is not None else "GPS 없음"
-        print(f'{s["file"].name:32} {loc:24} {s["taken"] or "-":20} {s["model"] or ""}')
-    no_gps = [s["file"].name for s in spots if s["lat"] is None]
+        return
+    for p in photos:
+        loc = f'{p["lat"]:.6f},{p["lon"]:.6f}' if p["lat"] is not None else "GPS 없음"
+        print(f'{p["file"].name:28} {loc:24} {p["taken"]:20} {p["model"]}')
+    radius = cfg.get("cluster_radius_m", 40)
+    lm = cfg.get("landmark")
+    print(f"\n장소 묶음 (반경 {radius}m):")
+    for i, g in enumerate(cluster(photos, radius), 1):
+        far = f'  타워까지 {dist_m(g["center"], (lm["lat"], lm["lon"])):.0f}m' if lm else ""
+        print(f'  {i}. {g["center"][0]:.6f},{g["center"][1]:.6f}{far}  ← {", ".join(p["file"].name for p in g["photos"])}')
+    no_gps = [p["file"].name for p in photos if p["lat"] is None]
     if no_gps:
-        print(f"\n! GPS 없는 사진 {len(no_gps)}장: thumbnail.yaml spots.<파일명>.lat/lon 으로 직접 입력하거나 skip 처리")
+        print(f"\n! GPS 없는 사진 {len(no_gps)}장: {', '.join(no_gps)}")
 
 
 if __name__ == "__main__":

@@ -1,25 +1,29 @@
 # 대표이미지 설정 — 렌더: python tools/thumbnail/thumbnail.py render <이 파일>
-eyebrow: TOKYO TOWER · PHOTO SPOTS
-title: ["도쿄타워", "사진스팟 총정리"]
-subtitle: ""            # 비우면 "N SPOTS"
-photos_dir: photos      # 원본 사진 폴더 (EXIF GPS 필요)
+eyebrow: A WALK AROUND TOKYO TOWER
+title: 도쿄타워 사진스팟 총정리
+subtitle: ""                      # 예: 비 오는 밤, 타워가 가장 예뻐 보였던 다섯 곳
+badge: [PHOTO SPOTS, "{n:02d} places"]
+photos_dir: photos                # 원본 사진 폴더 (EXIF GPS 필요)
 output: out/thumbnail.png
-max_spots: 8            # 썸네일 가독성 한계. 9장 이상은 비추천
+cluster_radius_m: 40              # 이 거리 안의 사진은 같은 장소로 묶음
 
 landmark:
-  label: ""            # 타워 아래 라벨 (예: TOKYO TOWER). 비우면 숨김
+  name: 도쿄타워
+  sub: TOKYO TOWER · 333m
   lat: 35.658581
   lon: 139.745433
 
 map:
   language: ko
-  zoom: null            # null = 자동
-  center: null          # [lat, lon], null = 자동
+  zoom: null                      # null = 자동
+  center: null                    # [lat, lon], null = 자동
 
-# 사진별 설정 (키 = 파일명)
-#   caption: 카드 하단 스팟명
-#   order: 번호 순서 (기본: 촬영시각순)
-#   lat/lon: GPS 없는 사진 수동 좌표
-#   card: [x, y] 카드 위치 수동 지정 (1080 기준 px)
-#   skip: true  제외
-spots: {}
+# 장소 목록 (번호 순서 = 이 순서). 비우면 GPS 자동 묶음으로 렌더링.
+# scan 결과를 보고 채운다.
+#   - name: 아카바네바시 교차로
+#     en: AKABANEBASHI
+#     desc: 타워 정면 · 횡단보도 야경
+#     photos: [IMG_0001.HEIC, IMG_0002.HEIC]   # 이 장소 사진들 (좌표 = 평균)
+#     cover: IMG_0002.HEIC                     # 카드 대표사진 (기본: 첫 사진)
+#     lat: / lon:                              # GPS 없을 때 수동 좌표
+places: []
