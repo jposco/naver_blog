@@ -20,8 +20,9 @@
 ## 대표이미지 (tools/thumbnail)
 - 글 폴더의 `thumbnail.yaml` + `photos/`(EXIF GPS 포함 원본) → `out/thumbnail.png` (1360×1200)
 - `python tools/thumbnail/thumbnail.py scan <yaml>` 로 GPS 확인 → `render <yaml>` 로 생성
-- 지도는 Google Static Maps (`GOOGLE_MAPS_API_KEY` 환경변수). 키를 파일에 쓰거나 커밋하지 말 것
-- scan 의 장소 묶음(반경 40m)을 보고 `places`(name/en/desc/photos/cover)를 채운다. 장소명은 좌표로 추정하되 사용자 확인 받기
+- 지도는 Maps Static API, 장소명은 Places API (New) (`GOOGLE_MAPS_API_KEY` 환경변수). 키를 파일에 쓰거나 커밋하지 말 것
+- scan 의 장소 묶음(반경 40m) 확인 → `names <yaml> --write` 로 Places API 장소명 1순위 후보를 `places`에 기입 → 후보 목록 보고 name/en 다듬고 desc·cover 채우기. 장소명은 사용자 확인 받기
+- Places API는 가게·역·공원 같은 POI만 준다. 골목·교차로·경사로 같은 스팟은 후보가 엉뚱하므로 직접 이름 짓기
 - 장소는 최대 6곳 (좌우 카드 3칸씩)
 - 렌더 후 반드시 이미지를 직접 열어 겹침/가독성 확인. 문제 있으면 `map.zoom`/`center`, `cover`로 조정
 - 구글 로고·저작권 표기는 가리지 않는다 (약관)

@@ -44,7 +44,8 @@ pull 안 하고 작업하면 충돌 난다. 한 글은 한 번에 한 PC에서�
 
 ```bash
 pip install -r requirements.txt && python -m playwright install chromium   # 로컬 최초 1회
-export GOOGLE_MAPS_API_KEY=...                                               # Static Maps API 키
+export GOOGLE_MAPS_API_KEY=...        # Maps Static API + Places API (New) 사용 가능한 키
 python tools/thumbnail/thumbnail.py scan   posts/2026/2026-10-14-tokyo-tower-photo-spots/thumbnail.yaml
+python tools/thumbnail/thumbnail.py names  posts/2026/2026-10-14-tokyo-tower-photo-spots/thumbnail.yaml --write  # 장소명 자동 기입
 python tools/thumbnail/thumbnail.py render posts/2026/2026-10-14-tokyo-tower-photo-spots/thumbnail.yaml
 ```

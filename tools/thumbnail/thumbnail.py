@@ -2,9 +2,11 @@
 
 사용법:
     python tools/thumbnail/thumbnail.py scan   posts/.../thumbnail.yaml   # 사진별 GPS + 장소 묶음(클러스터) 확인
+    python tools/thumbnail/thumbnail.py names  posts/.../thumbnail.yaml   # 장소 묶음별 장소명 후보 (Places API)
+    python tools/thumbnail/thumbnail.py names  posts/.../thumbnail.yaml --write   # places 가 비어 있으면 1순위 후보로 채움
     python tools/thumbnail/thumbnail.py render posts/.../thumbnail.yaml   # PNG 생성
 
-지도 배경은 환경변수 GOOGLE_MAPS_API_KEY 가 있어야 한다. 없으면 레이아웃 확인용 미리보기 배경으로 렌더링한다.
+지도 배경·장소명은 환경변수 GOOGLE_MAPS_API_KEY 가 있어야 한다 (Maps Static API, Places API (New)). 없으면 레이아웃 확인용 미리보기 배경으로 렌더링한다.
 """
 import base64
 import hashlib
@@ -143,6 +145,85 @@ def resolve_places(cfg, base):
     if len(out) > MAX_PLACES:
         raise SystemExit(f"장소 {len(out)}곳: 최대 {MAX_PLACES}곳. places 를 줄이세요")
     return out
+
+
+# ---------- 장소명 (Places API (New) Nearby Search) ----------
+# 사진 스팟으로 의미 있는 유형 우선. 나머지(가게·주차장 등)는 후순위
+PREFERRED_TYPES = {
+    "tourist_attraction", "park", "city_park", "garden", "plaza", "observation_deck", "historical_landmark",
+    "monument", "buddhist_temple", "shinto_shrine", "place_of_worship", "train_station", "subway_station",
+    "transit_station", "bridge", "museum", "cultural_landmark", "hiking_area", "scenic_spot",
+}
+
+
+def nearby_places(lat, lon, lang, radius=80):
+    key = os.environ.get("GOOGLE_MAPS_API_KEY")
+    if not key:
+        raise SystemExit("GOOGLE_MAPS_API_KEY 없음")
+    body = {"locationRestriction": {"circle": {"center": {"latitude": round(lat, 6), "longitude": round(lon, 6)}, "radius": radius}},
+            "maxResultCount": 10, "rankPreference": "DISTANCE", "languageCode": lang}
+    cached = CACHE / f"places_{hashlib.sha1(json.dumps(body).encode()).hexdigest()[:16]}.json"
+    if cached.exists():
+        return json.loads(cached.read_text(encoding="utf-8"))
+    r = requests.post("https://places.googleapis.com/v1/places:searchNearby", json=body, timeout=30, headers={
+        "X-Goog-Api-Key": key, "X-Goog-FieldMask": "places.id,places.displayName,places.location,places.types"})
+    if r.status_code != 200:
+        raise SystemExit(f"Places API 요청 실패 ({r.status_code}): {r.text[:300]}")
+    places = r.json().get("places", [])
+    CACHE.mkdir(parents=True, exist_ok=True)
+    cached.write_text(json.dumps(places, ensure_ascii=False), encoding="utf-8")
+    return places
+
+
+def name_candidates(center, landmark):
+    """좌표 근처 장소명 후보 [(ko, en, 거리m, types)]. 랜드마크 자체는 제외, 사진 스팟 유형 우선 정렬."""
+    en = {p["id"]: p["displayName"]["text"] for p in nearby_places(*center, "en")}
+    out = []
+    for p in nearby_places(*center, "ko"):
+        loc = (p["location"]["latitude"], p["location"]["longitude"])
+        if landmark and dist_m(loc, (landmark["lat"], landmark["lon"])) < 50:
+            continue
+        out.append((p["displayName"]["text"], en.get(p["id"], ""), dist_m(center, loc), p.get("types", [])))
+    out.sort(key=lambda c: (not PREFERRED_TYPES & set(c[3]), c[2]))
+    return out
+
+
+def names(cfg_path, write=False):
+    cfg_path = Path(cfg_path).resolve()
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    photos = read_photos(cfg_path.parent / cfg.get("photos_dir", "photos"))
+    lm = cfg.get("landmark")
+    if cfg.get("places"):
+        by_name = {p["file"].name: p for p in photos}
+        groups = [{"center": (pl["lat"], pl["lon"]) if pl.get("lat") is not None else
+                   tuple(sum(by_name[f][k] for f in pl["photos"]) / len(pl["photos"]) for k in ("lat", "lon")),
+                   "files": pl.get("photos", [])} for pl in cfg["places"]]
+        write = False
+    else:
+        groups = [{"center": g["center"], "files": [p["file"].name for p in g["photos"]]}
+                  for g in cluster(photos, cfg.get("cluster_radius_m", 40))]
+    if not groups:
+        raise SystemExit("장소 없음. 사진을 photos/ 에 넣으세요")
+    picked = []
+    for i, g in enumerate(groups, 1):
+        cands = name_candidates(g["center"], lm)
+        print(f'{i}. {g["center"][0]:.6f},{g["center"][1]:.6f}  ← {", ".join(g["files"])}')
+        for ko, en, d, types in cands[:5]:
+            print(f'     {d:4.0f}m  {ko} / {en}  [{", ".join(types[:3])}]')
+        if not cands:
+            print("     (후보 없음)")
+        picked.append(cands[0] if cands else ("", "", 0, []))
+    block = "places:\n" + "".join(
+        f"  - name: {json.dumps(ko, ensure_ascii=False)}\n    en: {json.dumps(en, ensure_ascii=False)}\n    desc: \"\"\n"
+        f"    photos: [{', '.join(g['files'])}]\n" for (ko, en, _, _), g in zip(picked, groups))
+    if write:
+        text = cfg_path.read_text(encoding="utf-8")
+        if "\nplaces: []" not in text:
+            raise SystemExit("thumbnail.yaml 에 'places: []' 줄이 없어 자동 기입 불가. 아래 블록을 직접 붙여넣으세요\n\n" + block)
+        cfg_path.write_text(text.replace("\nplaces: []", "\n" + block.rstrip("\n")), encoding="utf-8")
+        print(f"\n→ {cfg_path.name} 에 places {len(groups)}곳 기입 (1순위 후보). 이름·desc 확인 후 수정하세요")
+    else:
+        print("\n" + block)
 
 
 # ---------- 지도 투영 (Web Mercator) ----------
@@ -343,6 +424,10 @@ def scan(cfg_path):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] not in ("scan", "render"):
+    args = sys.argv[1:]
+    if len(args) < 2 or args[0] not in ("scan", "names", "render"):
         raise SystemExit(__doc__)
-    {"scan": scan, "render": render}[sys.argv[1]](sys.argv[2])
+    if args[0] == "names":
+        names(args[1], write="--write" in args)
+    else:
+        {"scan": scan, "render": render}[args[0]](args[1])
